@@ -1,16 +1,16 @@
 const DRAWING_WIDTH = 720;
 const DRAWING_HEIGHT = 340;
 
-function fit(width, height) {
-  const scale = Math.min(width / DRAWING_WIDTH, height / DRAWING_HEIGHT);
+function fit(width, height, drawingWidth, drawingHeight) {
+  const scale = Math.min(width / drawingWidth, height / drawingHeight);
   return {
     scale,
-    x: (width - DRAWING_WIDTH * scale) / 2,
-    y: (height - DRAWING_HEIGHT * scale) / 2,
+    x: (width - drawingWidth * scale) / 2,
+    y: (height - drawingHeight * scale) / 2,
   };
 }
 
-export function mountCanvas(root, { label, draw }) {
+export function mountCanvas(root, { label, draw, drawingWidth = DRAWING_WIDTH, drawingHeight = DRAWING_HEIGHT }) {
   const viewport = document.createElement('div');
   viewport.className = 'physics-view-viewport';
   const canvas = document.createElement('canvas');
@@ -48,17 +48,17 @@ export function mountCanvas(root, { label, draw }) {
     context.fillStyle = background;
     context.fillRect(0, 0, width, height);
 
-    const frame = fit(width, height);
+    const frame = fit(width, height, drawingWidth, drawingHeight);
     context.save();
     try {
       context.translate(frame.x, frame.y);
       context.scale(frame.scale, frame.scale);
       context.beginPath();
-      context.rect(0, 0, DRAWING_WIDTH, DRAWING_HEIGHT);
+      context.rect(0, 0, drawingWidth, drawingHeight);
       context.clip();
       context.lineCap = 'round';
       context.lineJoin = 'round';
-      draw(context, snapshot, { width: DRAWING_WIDTH, height: DRAWING_HEIGHT, compact: width < 475 });
+      draw(context, snapshot, { width: drawingWidth, height: drawingHeight, compact: width < 475 });
     } finally {
       context.restore();
     }
@@ -80,11 +80,11 @@ export function mountCanvas(root, { label, draw }) {
     redraw,
     getPoint(event) {
       const rect = canvas.getBoundingClientRect();
-      const frame = fit(rect.width, rect.height);
+      const frame = fit(rect.width, rect.height, drawingWidth, drawingHeight);
       if (!frame.scale) return null;
       const x = (event.clientX - rect.left - frame.x) / frame.scale;
       const y = (event.clientY - rect.top - frame.y) / frame.scale;
-      if (x < 0 || x > DRAWING_WIDTH || y < 0 || y > DRAWING_HEIGHT) return null;
+      if (x < 0 || x > drawingWidth || y < 0 || y > drawingHeight) return null;
       return { x, y };
     },
     destroy() {

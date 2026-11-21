@@ -1,6 +1,7 @@
-import { mountCanvas } from './canvas.js';
+import { mountCanvas } from './canvas.js?v=field1';
 
 const WIDTH = 720;
+const PLAN_WIDTH = 400;
 const HEIGHT = 340;
 const PROBE_EVENT = 'physics-terrain-probe';
 // The potential-terrain solver regularizes the field within 8 mm of a point charge.
@@ -14,7 +15,7 @@ const COLORS = {
   probe: '#fff0b2',
   label: '#c5dce9',
 };
-const LEVELS = [-.85, -.61, -.41, -.23, -.11, 0, .11, .23, .41, .61, .85];
+const LEVELS = [-1.35, -.92, -.65, -.45, -.31, -.20, -.12, -.065, -.026, 0, .026, .065, .12, .20, .31, .45, .65, .92, 1.35];
 const GRID_STEP = 2;
 const formatter = new Intl.NumberFormat('zh-CN', { maximumSignificantDigits: 4 });
 
@@ -51,12 +52,12 @@ function makeGrid(result, companion) {
   const domainWidth = xMax - xMin;
   const domainHeight = yMax - yMin;
   if (domainWidth <= 0 || domainHeight <= 0) return null;
-  const scale = Math.min((companion ? 535 : 226) / domainWidth, (companion ? 264 : 224) / domainHeight);
+  const scale = Math.min((companion ? PLAN_WIDTH - 12 : 226) / domainWidth, (companion ? HEIGHT - 16 : 224) / domainHeight);
   const mapWidth = domainWidth * scale;
   const mapHeight = domainHeight * scale;
   const map = {
-    left: (companion ? WIDTH / 2 : 580) - mapWidth / 2,
-    top: (companion ? 180 : 169) - mapHeight / 2,
+    left: (companion ? PLAN_WIDTH / 2 : 580) - mapWidth / 2,
+    top: (companion ? HEIGHT / 2 : 169) - mapHeight / 2,
     width: mapWidth,
     height: mapHeight,
   };
@@ -134,7 +135,7 @@ function paintContours(ctx, grid, compact) {
   const getPoint = (column, row) => result.terrain[row * size + column];
   const edge = size - 1;
   const cells = [];
-  ctx.fillStyle = '#0c202e';
+  ctx.fillStyle = '#10141e';
   ctx.fillRect(map.left, map.top, map.width, map.height);
   for (let row = 0; row < edge; row++) {
     for (let column = 0; column < edge; column++) {
@@ -143,7 +144,9 @@ function paintContours(ctx, grid, compact) {
       const start = plan(corners[3]);
       const end = plan(corners[1]);
       const strength = Math.tanh(mean / reference);
-      ctx.fillStyle = tint(strength, .08 + .25 * Math.abs(strength));
+      ctx.fillStyle = strength < 0
+        ? `rgba(58, 149, 175, ${Math.min(.42, Math.abs(strength) ** .55 * .45)})`
+        : `rgba(192, 77, 70, ${Math.min(.42, Math.abs(strength) ** .55 * .45)})`;
       ctx.fillRect(start.x, start.y, end.x - start.x + .2, end.y - start.y + .2);
       cells.push({ mean, corners });
     }
@@ -165,15 +168,52 @@ function paintContours(ctx, grid, compact) {
         ctx.lineTo(to.x, to.y);
       }
     }
-    ctx.strokeStyle = ratio === 0 ? '#d8edee' : tint(ratio, .9);
-    ctx.lineWidth = compact ? (ratio === 0 ? 2.3 : 1.65) : (ratio === 0 ? 1.5 : 1.15);
+    ctx.strokeStyle = ratio === 0 ? '#d2dbe2' : ratio > 0 ? '#e7a49a' : '#9acfdc';
+    ctx.lineWidth = compact ? 1.25 : 1.1;
     ctx.stroke();
   }
 
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(map.left, map.top, map.width, map.height);
+  ctx.clip();
+  for (const path of result.fieldLines ?? []) {
+    const points = path.points;
+    if (points.length < 3) continue;
+    // The solver also traces back from negative charges. Keep each connecting arc once.
+    if (!path.fromChargeId && result.charges.some(charge =>
+      charge.q > 0 && Math.hypot(points[0].x - charge.x, points[0].y - charge.y) < .012)) continue;
+    const start = plan(points[0]);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    for (const point of points.slice(1)) {
+      const vertex = plan(point);
+      ctx.lineTo(vertex.x, vertex.y);
+    }
+    ctx.strokeStyle = '#f4d57e';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    const middle = Math.floor(points.length * .47);
+    const a = plan(points[middle]);
+    const b = plan(points[middle + 1]);
+    ctx.save();
+    ctx.translate(a.x, a.y);
+    ctx.rotate(Math.atan2(b.y - a.y, b.x - a.x));
+    ctx.beginPath();
+    ctx.moveTo(4.8, 0);
+    ctx.lineTo(-3.5, -2.9);
+    ctx.lineTo(-3.5, 2.9);
+    ctx.closePath();
+    ctx.fillStyle = '#ffe397';
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
   for (const charge of result.charges ?? []) {
     const point = plan(charge);
     const positive = charge.q > 0;
-    mark(ctx, point, positive ? '#402c33' : '#16374a', 10.5);
+    mark(ctx, point, positive ? '#fac2aa' : '#ace7f4', 9);
+    mark(ctx, point, positive ? '#a74641' : '#286d83', 7.8);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.font = '750 17px system-ui, sans-serif';
@@ -202,7 +242,7 @@ function paintBackdrop(ctx, grid, compact, companion) {
     heading(ctx, '电势曲面示意', 227, compact);
     paintSurface(ctx, grid);
   }
-  heading(ctx, '俯视等势线', companion ? WIDTH / 2 : 580, compact);
+  if (!companion) heading(ctx, '俯视图', 580, compact);
   paintContours(ctx, grid, compact);
 }
 
@@ -248,11 +288,13 @@ export function createTerrainView({ root, companion = false }) {
   let paintedCompact;
   const probe = { column: null, row: null };
   const raster = document.createElement('canvas');
-  raster.width = WIDTH * 2;
+  const drawingWidth = companion ? PLAN_WIDTH : WIDTH;
+  raster.width = drawingWidth * 2;
   raster.height = HEIGHT * 2;
   const rasterContext = raster.getContext('2d');
   rasterContext.scale(2, 2);
   const visualization = mountCanvas(root, {
+    drawingWidth,
     label: companion
       ? '电势地形的俯视等势线。黄色标记和三维视图中的探针指向同一个位置。'
       : '电势地形。左边是电势曲面示意图，右边是俯视等势线。两个黄色标记指向同一个位置。',
@@ -262,7 +304,7 @@ export function createTerrainView({ root, companion = false }) {
         paintedGrid = grid;
         paintedCompact = compact;
       }
-      ctx.drawImage(raster, 0, 0, WIDTH, HEIGHT);
+      ctx.drawImage(raster, 0, 0, drawingWidth, HEIGHT);
       const point = currentPoint();
       if (point) paintProbe(ctx, point, grid, compact, companion);
     },
@@ -283,7 +325,7 @@ export function createTerrainView({ root, companion = false }) {
   const legend = document.createElement('p');
   legend.className = 'physics-terrain-legend';
   legend.style.margin = '0';
-  legend.textContent = '暖色表示正电势，冷色表示负电势。高度经压缩。点击俯视图或用方向键移动探针。';
+  legend.textContent = '红线为正等势线，蓝线为负等势线。金色箭头沿电场方向，指向电势降低的一侧。点击图面可移动探针。';
   controls.append(movement, readings, legend);
   root.append(controls);
 

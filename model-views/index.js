@@ -1,13 +1,13 @@
-import { createTerrainView } from './terrain.js';
+import { createTerrainView } from './terrain.js?v=field1';
 import { createInterferenceView } from './interference.js';
 import { createTrackView } from './track.js?v=loop2';
-import { mountTerrainThree } from './terrain-three.js?v=loop2';
+import { mountTerrainThree } from './terrain-three.js?v=field1';
 import { mountInterferenceThree } from './interference-three.js';
 import { mountTrackThree } from './track-three.js?v=loop2';
 
 const views = {
   'electricity.potential': {
-    title: '等势线与探针',
+    title: '俯视图 · 等势线与电场线',
     companion: createTerrainView,
     three: mountTerrainThree,
   },
