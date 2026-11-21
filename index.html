@@ -689,6 +689,17 @@ body {
   }
 }
 </style>
+    <style>
+      #lab-opening {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: #050b12;
+        z-index: 10000;
+      }
+    </style>
 </head>
   <body>
     <div id="app">
@@ -698,8 +709,53 @@ body {
           <p>正在装配实验台…</p>
         </div>
       </div>
+    </div>
 
-      
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      if (params.has('experiment') || params.has('skip-opening') ||
+          matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+      const seenKey = 'physics-lab.opening-seen';
+      try {
+        if (sessionStorage.getItem(seenKey)) return;
+      } catch {}
+
+      const app = document.getElementById('app');
+      const frame = document.createElement('iframe');
+      frame.id = 'lab-opening';
+      frame.title = '生成式物理实验沙盒开场动画';
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.src = './opening.html?embedded';
+
+      const readyTimeout = setTimeout(closeOpening, 6000);
+      window.addEventListener('message', receiveOpeningMessage);
+      app.inert = true;
+      document.body.append(frame);
+
+      function receiveOpeningMessage(event) {
+        if (event.source !== frame.contentWindow || event.origin !== 'null') return;
+
+        if (event.data === 'physics-lab:opening-ready') {
+          clearTimeout(readyTimeout);
+          frame.focus();
+        } else if (event.data === 'physics-lab:enter') {
+          try { sessionStorage.setItem(seenKey, '1'); } catch {}
+          closeOpening();
+        }
+      }
+
+      function closeOpening() {
+        clearTimeout(readyTimeout);
+        window.removeEventListener('message', receiveOpeningMessage);
+        frame.remove();
+        app.inert = false;
+        app.tabIndex = -1;
+        app.focus({ preventScroll: true });
+      }
+    })();
+  </script>
   <script src="./model-views/circular-motion.js?v=loop2"></script>
   <script src="./model-views/circular-experiment.js?v=loop2"></script>
   <script>
