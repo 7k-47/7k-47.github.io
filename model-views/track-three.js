@@ -1,14 +1,11 @@
-import { defaultForceLimits, endOnTrack, forceOptions } from './track.js';
+import { trackForceColors } from './track.js?v=loop2';
 
-// Match the coordinate scale of the existing semicircle scene.
-const WORLD_UNITS_PER_METRE = 0.36;
-const RAIL_LIFT = 0.004;
-const MATCH_TOLERANCE = 1e-6;
+const SCALE = .36;
 
-function disposeObjects(group) {
+function disposeGroup(group) {
   const geometries = new Set();
   const materials = new Set();
-  group.traverse((object) => {
+  group.traverse(object => {
     if (object.geometry) geometries.add(object.geometry);
     if (object.material) materials.add(object.material);
   });
@@ -17,159 +14,172 @@ function disposeObjects(group) {
   group.clear();
 }
 
-export function mountTrackThree({ scene, three, model }, solve) {
-  const { Group, Mesh, MeshStandardMaterial, MeshBasicMaterial, TubeGeometry, SphereGeometry,
-    Vector3, CatmullRomCurve3, BoxGeometry } = three;
-  const comparison = new Group();
-  comparison.name = 'Semicircular track force comparisons';
-  scene.add(comparison);
-  const originalDepth = model.group.position.z;
-  const originalAnchors = model.anchors;
-  model.anchors = function () {
-    return originalAnchors.call(this).map((anchor) => ({
-      ...anchor,
-      position: anchor.position.clone().add(this.group.position),
-    }));
-  };
-  let dimensions;
-  let lanes = [];
-  let signature;
-  let activeLane = -1;
+export function mountTrackThree({ scene, three, model }) {
+  const { Group, Mesh, MeshStandardMaterial, MeshBasicMaterial, TubeGeometry, SphereGeometry, Vector3,
+    CatmullRomCurve3, BoxGeometry, ArrowHelper } = three;
+  const root = new Group();
+  root.name = 'vertical-loop-real-time';
+  const course = new Group();
+  const moving = new Group();
+  root.add(course, moving);
+  scene.add(root);
+  const stageRing = scene.getObjectByName('stage-ring');
+  const stageRingVisible = stageRing?.visible;
+  if (stageRing) stageRing.visible = false;
+  const floorGrid = scene.children.find(object => object.type === 'GridHelper');
+  const floorHeight = floorGrid?.position.y;
+  const wasVisible = model.group.visible;
+  const oldAnchors = model.anchors;
+  model.group.visible = false;
+  let radius = 0;
+  let length = 0;
+  let forceScale = 0;
+  let geometryKey;
 
-  function rail(points, material, radius) {
-    return new Mesh(new TubeGeometry(new CatmullRomCurve3(points), Math.max(12, points.length), radius, 8, false), material);
-  }
+  const ball = new Mesh(new SphereGeometry(.043, 32, 20), new MeshStandardMaterial({
+    color: '#f5bc68', metalness: .38, roughness: .29,
+  }));
+  ball.castShadow = true;
+  moving.add(ball);
 
-  function createLane(entry, depth) {
-    const { length, radius } = dimensions;
-    const group = new Group();
-    group.name = entry.title;
-    group.position.z = depth;
-    comparison.add(group);
+  const shaftGeometry = new BoxGeometry(1, 1, 1);
+  const arrows = Object.entries(trackForceColors).map(([key, color], index) => {
+    const arrow = new ArrowHelper(new Vector3(1, 0, 0), new Vector3(), 1, color);
+    const offset = [-.064, .018, -.052, .074][index];
+    const shaft = new Mesh(shaftGeometry, new MeshBasicMaterial({ color, depthTest: false }));
+    shaft.renderOrder = 8 + index;
+    shaft.visible = false;
+    arrow.line.visible = false;
+    arrow.line.material.depthTest = false;
+    arrow.cone.material.depthTest = false;
+    arrow.line.renderOrder = arrow.cone.renderOrder = 8 + index;
+    arrow.visible = false;
+    moving.add(arrow, shaft);
+    return { key, arrow, shaft, offset };
+  });
+  const direction = new Vector3();
+  const up = new Vector3(0, 1, 0);
 
-    const structure = new MeshStandardMaterial({ color: '#456478', roughness: 0.37, metalness: 0.44 });
-    const deckMaterial = new MeshStandardMaterial({ color: '#182c3d', roughness: 0.76, metalness: 0.16 });
-    const deck = new Mesh(new BoxGeometry(length + radius + 0.2, 0.026, 0.27), deckMaterial);
-    deck.position.set((radius - length) / 2, -0.025, 0);
-    deck.receiveShadow = true;
-    group.add(deck);
-
-    const start = new Vector3(-length, RAIL_LIFT, 0);
-    const onArc = (angle) => {
-      const theta = angle * Math.PI / 180;
-      return new Vector3(radius * Math.sin(theta), RAIL_LIFT + radius * (1 - Math.cos(theta)), 0);
-    };
-    const pathTo = (angle) => {
-      const points = [start];
-      if (angle === 0) return [...points, onArc(0)];
-      const segments = Math.max(2, Math.ceil(angle / 3));
-      for (let index = 0; index <= segments; index++) points.push(onArc(angle * index / segments));
-      return points;
-    };
-    group.add(rail(pathTo(180), structure, 0.014));
-
-    const outcome = endOnTrack(entry.result);
-    if (!outcome) return { group, entry, marker: null };
-    const route = new MeshBasicMaterial({ color: entry.color });
-    if (outcome.angle !== null) {
-      const illuminated = pathTo(outcome.angle).map((point) => point.clone().setY(point.y + 0.01));
-      group.add(rail(illuminated, route, 0.01));
+  function makeCourse() {
+    disposeGroup(course);
+    const nickel = new MeshStandardMaterial({ color: '#a1b6c1', metalness: .76, roughness: .31 });
+    const dark = new MeshStandardMaterial({ color: '#315169', metalness: .67, roughness: .49 });
+    const base = new MeshStandardMaterial({ color: '#152734', metalness: .38, roughness: .65 });
+    const separation = Math.min(.075, radius * .34);
+    const rail = Math.min(.016, radius * .065);
+    function block(x, y, z, width, height, depth, material) {
+      const mesh = new Mesh(new BoxGeometry(width, height, depth), material);
+      mesh.position.set(x, y, z);
+      mesh.receiveShadow = true;
+      course.add(mesh);
+      return mesh;
     }
-    const endpoint = outcome.angle === null ? start.clone() : onArc(outcome.angle);
-    endpoint.y += 0.04;
-    const marker = new Mesh(new SphereGeometry(0.027, 16, 12), route);
-    marker.position.copy(endpoint);
-    group.add(marker);
-    const halo = new Mesh(new SphereGeometry(0.044, 16, 12), new MeshBasicMaterial({
-      color: entry.color, transparent: true, opacity: 0.22, depthWrite: false,
-    }));
-    halo.position.copy(endpoint);
-    group.add(halo);
-
-    if (outcome.angle < 180) {
-      const top = new Mesh(new SphereGeometry(0.016, 12, 8), structure);
-      top.position.copy(onArc(180));
-      group.add(top);
+    const supportY = Math.max(.13, radius * .27);
+    if (floorGrid) floorGrid.position.y = -supportY - .018;
+    block((radius - length) / 2, -supportY, 0, length + radius + .17, .034, .38, base);
+    for (const z of [-separation, separation]) {
+      const points = Array.from({ length: 112 }, (_, index) => {
+        const angle = index * Math.PI / 56;
+        return new Vector3(radius * Math.sin(angle), radius * (1 - Math.cos(angle)) - .025, z);
+      });
+      const ring = new Mesh(new TubeGeometry(new CatmullRomCurve3(points, true), 160, rail, 10, true), nickel);
+      ring.castShadow = true;
+      course.add(ring);
+      block(-length / 2, -.025, z, length, rail * 2, rail * 2, nickel);
     }
-    return { group, entry, marker, halo };
-  }
-
-  function update(snapshot) {
-    const result = snapshot.result;
-    if (!result || !Number.isFinite(result.requiredForce)) return;
-    const definition = snapshot.paramDefs?.find((item) => item.key === 'appliedForce');
-    const limits = definition?.step > 0 ? definition : defaultForceLimits;
-    const key = [result.requiredForce, result.radius, result.g, result.massKg, result.horizontalLength,
-      limits.min, limits.max, limits.step, limits.precision].join('/');
-    if (key !== signature) {
-      signature = key;
-      const length = result.horizontalLength * WORLD_UNITS_PER_METRE;
-      const radius = result.radius * WORLD_UNITS_PER_METRE;
-      const spacing = Math.max(0.72, Math.min(1.75, (length + radius) * 0.5));
-      dimensions = { length, radius, spacing };
-      disposeObjects(comparison);
-      const depths = [spacing, 0, -spacing];
-      lanes = forceOptions(snapshot.parameters, result.requiredForce, limits, solve)
-        .map((entry, index) => createLane(entry, originalDepth + depths[index]));
+    for (let index = 0; index < 24; index++) {
+      const angle = index * Math.PI / 12;
+      const x = (radius + .017) * Math.sin(angle);
+      const y = radius - (radius + .017) * Math.cos(angle) - .025;
+      const tie = block(x, y, 0, .028, .018, 2 * separation + .015, dark);
+      tie.rotation.z = angle;
     }
-
-    activeLane = lanes.findIndex(({ entry }) => entry.appliedForce != null &&
-      Math.abs(entry.appliedForce - result.appliedForce) <= MATCH_TOLERANCE &&
-      Math.abs(result.initialSpeed) <= MATCH_TOLERANCE);
-    model.group.position.z = activeLane < 0
-      ? originalDepth - dimensions.spacing * 2
-      : lanes[activeLane].group.position.z;
-    const showResultMarker = snapshot.runStatus === 'idle';
-    lanes.forEach(({ marker, halo }, index) => {
-      if (marker) marker.visible = index !== activeLane || showResultMarker;
-      if (halo) halo.visible = index !== activeLane || showResultMarker;
-    });
-  }
-
-  function extents() {
-    if (!dimensions) return null;
-    const { length, radius, spacing } = dimensions;
-    const minimumZ = originalDepth - (activeLane < 0 ? 2 * spacing : spacing) - 0.17;
-    const maximumZ = originalDepth + spacing + 0.17;
-    return { minimum: new Vector3(-length - 0.1, -0.08, minimumZ),
-      maximum: new Vector3(radius + 0.1, radius * 2 + 0.14, maximumZ) };
-  }
-
-  function frame(stage) {
-    const bounds = extents();
-    if (!bounds) return false;
-    const { minimum, maximum } = bounds;
-    const target = minimum.clone().add(maximum).multiplyScalar(0.5);
-    const direction = new Vector3(0.95, 0.6, 0.53).normalize();
-    const right = new Vector3(direction.z, 0, -direction.x).normalize();
-    const up = direction.clone().cross(right).normalize();
-    const vertical = Math.tan(stage.camera.fov * Math.PI / 360);
-    const horizontal = vertical * Math.max(0.2, stage.camera.aspect);
-    let distance = 0;
-    for (const x of [minimum.x, maximum.x]) {
-      for (const y of [minimum.y, maximum.y]) {
-        for (const z of [minimum.z, maximum.z]) {
-          const corner = new Vector3(x, y, z).sub(target);
-          const depth = corner.dot(direction);
-          distance = Math.max(distance, depth + Math.abs(corner.dot(right)) / horizontal,
-            depth + Math.abs(corner.dot(up)) / vertical);
-        }
-      }
+    const posts = [-length * .85, -length * .25, radius * .66];
+    for (const x of posts) {
+      const top = x < 0 ? -.045 : radius * (1 - Math.sqrt(1 - .66 ** 2)) - .055;
+      const from = -supportY + .019;
+      if (top <= from) continue;
+      for (const z of [-separation, separation]) block(x, (top + from) / 2, z, .033, top - from, .032, dark);
     }
-    distance *= 1.13;
-    stage.setView(target.clone().addScaledVector(direction, distance).toArray(), target.toArray());
-    return true;
   }
+
+  model.anchors = () => [
+    { index: '01', label: '入轨点', meta: '最低点 · 0° / 360°', position: new Vector3(0, 0, 0), side: 'left' },
+    { index: '02', label: '最高点', meta: '180°', position: new Vector3(0, 2 * radius, 0), side: 'right' },
+  ];
 
   return {
-    update,
-    frame,
-    bounds: extents,
+    update({ result, motion }) {
+      if (!motion || !result) return;
+      const nextGeometry = `${result.radius}/${result.horizontalLength}`;
+      if (geometryKey !== nextGeometry) {
+        geometryKey = nextGeometry;
+        radius = result.radius * SCALE;
+        length = result.horizontalLength * SCALE;
+        makeCourse();
+      }
+      const maxForce = Math.max(result.appliedForce, result.massKg * (result.g + result.speedAtM ** 2 / result.radius));
+      forceScale = Math.min(1, Math.max(.35, radius * 1.55)) / maxForce;
+      ball.position.set(motion.position.x * SCALE, motion.position.y * SCALE + .026, 0);
+      for (const { key, arrow, shaft, offset } of arrows) {
+        const [x, y] = motion[key];
+        const magnitude = Math.hypot(x, y);
+        const arrowLength = magnitude * forceScale;
+        arrow.visible = magnitude >= .005 && arrowLength >= .002;
+        shaft.visible = arrow.visible;
+        if (!arrow.visible) continue;
+        direction.set(x / magnitude, y / magnitude, 0);
+        arrow.position.copy(ball.position);
+        arrow.position.x -= direction.y * offset;
+        arrow.position.y += direction.x * offset;
+        arrow.position.z = .025;
+        arrow.setDirection(direction);
+        const head = Math.min(.071, arrowLength * .40);
+        arrow.setLength(arrowLength, head, head * .62);
+        const shaftLength = arrowLength - head * .72;
+        const thickness = Math.min(.012, arrowLength * .18);
+        shaft.position.copy(arrow.position).addScaledVector(direction, shaftLength / 2);
+        shaft.quaternion.setFromUnitVectors(up, direction);
+        shaft.scale.set(thickness, shaftLength, thickness);
+      }
+    },
+    frame(stage) {
+      if (!radius) return false;
+      const target = new Vector3((radius - length) * .43, radius * .85, 0);
+      const outward = new Vector3(.31, .24, 1).normalize();
+      const right = new Vector3(0, 1, 0).cross(outward).normalize();
+      const up = outward.clone().cross(right).normalize();
+      const vertical = Math.tan(stage.camera.fov * Math.PI / 360) * .85;
+      const horizontal = vertical * Math.max(.22, stage.camera.aspect);
+      let distance = .62;
+      for (const x of [-length - .10, radius + .17]) {
+        for (const y of [-.16, 2 * radius + .24]) {
+          for (const z of [-.23, .23]) {
+            const point = new Vector3(x, y, z).sub(target);
+            const span = Math.max(Math.abs(point.dot(right)) / horizontal, Math.abs(point.dot(up)) / vertical);
+            distance = Math.max(distance, point.dot(outward) + span);
+          }
+        }
+      }
+      stage.setView(target.clone().addScaledVector(outward, distance).toArray(), target.toArray());
+      return true;
+    },
     destroy() {
-      model.group.position.z = originalDepth;
-      model.anchors = originalAnchors;
-      scene.remove(comparison);
-      disposeObjects(comparison);
+      if (stageRing) stageRing.visible = stageRingVisible;
+      if (floorGrid) floorGrid.position.y = floorHeight;
+      model.group.visible = wasVisible;
+      model.anchors = oldAnchors;
+      scene.remove(root);
+      disposeGroup(course);
+      ball.geometry.dispose();
+      ball.material.dispose();
+      shaftGeometry.dispose();
+      for (const { arrow, shaft } of arrows) {
+        // ArrowHelper shares geometries across instances. Only these materials are owned here.
+        arrow.line.material.dispose();
+        arrow.cone.material.dispose();
+        shaft.material.dispose();
+      }
     },
   };
 }

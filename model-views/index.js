@@ -1,9 +1,9 @@
 import { createTerrainView } from './terrain.js';
 import { createInterferenceView } from './interference.js';
-import { createTrackView } from './track.js';
-import { mountTerrainThree } from './terrain-three.js';
+import { createTrackView } from './track.js?v=loop2';
+import { mountTerrainThree } from './terrain-three.js?v=loop2';
 import { mountInterferenceThree } from './interference-three.js';
-import { mountTrackThree } from './track-three.js';
+import { mountTrackThree } from './track-three.js?v=loop2';
 
 const views = {
   'electricity.potential': {
@@ -17,13 +17,13 @@ const views = {
     three: mountInterferenceThree,
   },
   'mechanics.circular': {
-    title: '临界条件与仿真读数',
+    title: '小球实时受力',
     companion: createTrackView,
     three: mountTrackThree,
   },
 };
 
-export function mountModelView(host, snapshot, { native, solve, setParameters }) {
+export function mountModelView(host, snapshot, { native, solve, setParameters, seek }) {
   const experiment = views[snapshot.experimentId];
   if (!experiment) return null;
   const root = document.createElement('div');
@@ -38,7 +38,7 @@ export function mountModelView(host, snapshot, { native, solve, setParameters })
   let model;
   try {
     companion = experiment.companion({
-      root, solve, setParameters, companion: Boolean(native), controlsOnly: Boolean(native),
+      root, solve, setParameters, seek, companion: Boolean(native),
     });
     model = native ? experiment.three(native, solve) : null;
     companion.update(snapshot);

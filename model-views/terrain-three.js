@@ -1,9 +1,9 @@
 const PROBE_EVENT = 'physics-terrain-probe';
 const REFERENCE_CHARGE_C = 2e-6;
-const SURFACE_HEIGHT = .39;
-const SURFACE_LIFT = .004;
+const SURFACE_HEIGHT = .34;
+const SURFACE_LIFT = .002;
 const CONTOUR_LEVELS = [-.72, -.43, -.22, -.09, 0, .09, .22, .43, .72];
-const PROBE_COLOR = 0xffe8a7;
+const PROBE_COLOR = 0xe5cc91;
 
 function getTerrain(result) {
   if (!result?.terrain?.length || !result.bounds) return null;
@@ -76,9 +76,9 @@ function addSurface(three, group, terrain) {
   const positions = [];
   const colors = [];
   const indices = [];
-  const neutral = new three.Color(0x174657);
-  const positive = new three.Color(0xe78563);
-  const negative = new three.Color(0x2ea7e0);
+  const neutral = new three.Color(0x475b64);
+  const positive = new three.Color(0xb19077);
+  const negative = new three.Color(0x41798f);
   const color = new three.Color();
   for (const sample of result.terrain) {
     const signed = strength(sample.phi);
@@ -99,10 +99,8 @@ function addSurface(three, group, terrain) {
   geometry.computeVertexNormals();
   const surface = new three.Mesh(geometry, new three.MeshStandardMaterial({
     vertexColors: true,
-    metalness: .18,
-    roughness: .46,
-    emissive: 0x092532,
-    emissiveIntensity: .26,
+    metalness: .15,
+    roughness: .74,
     side: three.DoubleSide,
   }));
   surface.name = 'potential-signed-mesh';
@@ -116,7 +114,7 @@ function addSurface(three, group, terrain) {
     color.copy(neutral).lerp(signed < 0 ? negative : positive, .25 + .75 * Math.abs(signed));
     wireColors.push(color.r, color.g, color.b);
   };
-  for (let axis = 0; axis < size; axis += 2) {
+  for (let axis = 0; axis < size; axis += 4) {
     for (let index = 0; index < size - 1; index++) {
       addVertex(point(axis, index));
       addVertex(point(axis, index + 1));
@@ -124,7 +122,7 @@ function addSurface(three, group, terrain) {
       addVertex(point(index + 1, axis));
     }
   }
-  group.add(segments(three, wire, { transparent: true, opacity: .62, depthWrite: false }, wireColors));
+  group.add(segments(three, wire, { transparent: true, opacity: .20, depthWrite: false }, wireColors));
 }
 
 function contourPoint(first, second, phi) {
@@ -149,14 +147,14 @@ function addContours(three, group, terrain) {
           const mean = corners.reduce((sum, value) => sum + value.phi, 0) / 4;
           if ((mean < phi) !== (corners[0].phi < phi)) crossings.push(crossings.shift());
         }
-        for (const crossing of crossings) positions.push(...project(crossing, level === 0 ? .011 : .007));
+        for (const crossing of crossings) positions.push(...project(crossing, level === 0 ? .005 : .0035));
       }
     }
     if (!positions.length) continue;
     const line = segments(three, positions, {
-      color: level === 0 ? 0xcaf7ed : level > 0 ? 0xfcb48b : 0x8fd8ff,
+      color: level === 0 ? 0xd3dbd7 : level > 0 ? 0xc6ae98 : 0x9cbdcc,
       transparent: true,
-      opacity: level === 0 ? 1 : .48,
+      opacity: level === 0 ? .82 : .35,
       depthWrite: false,
     });
     if (level === 0) line.name = 'potential-zero-contour';
@@ -174,20 +172,18 @@ function addFieldLines(three, group, terrain) {
       positions.push(...terrain.project(terrain.sample(first), .014), ...terrain.project(terrain.sample(second), .014));
     }
   }
-  if (positions.length) group.add(segments(three, positions, { color: 0x84dac5, transparent: true, opacity: .20, depthWrite: false }));
+  if (positions.length) group.add(segments(three, positions, { color: 0x8aafa9, transparent: true, opacity: .14, depthWrite: false }));
 }
 
 function addCharges(three, group, terrain) {
   for (const charge of terrain.result.charges ?? []) {
-    const [x, y, z] = terrain.project(terrain.sample(charge), .024);
-    const color = charge.q < 0 ? 0x85d9fc : 0xffa689;
-    const sphere = new three.Mesh(new three.SphereGeometry(.022, 18, 12), new three.MeshBasicMaterial({ color, toneMapped: false }));
-    sphere.position.set(x, y, z);
-    const glow = new three.Mesh(new three.SphereGeometry(.036, 16, 12), new three.MeshBasicMaterial({
-      color, toneMapped: false, transparent: true, depthWrite: false, opacity: .16,
+    const [x, y, z] = terrain.project(terrain.sample(charge), .013);
+    const color = charge.q < 0 ? 0x719ba9 : 0xbd9b80;
+    const pin = new three.Mesh(new three.SphereGeometry(.012, 18, 12), new three.MeshStandardMaterial({
+      color, metalness: .40, roughness: .42,
     }));
-    glow.position.copy(sphere.position);
-    group.add(sphere, glow);
+    pin.position.set(x, y, z);
+    group.add(pin);
   }
 }
 
@@ -205,7 +201,7 @@ function addParticleTrack(three, group, terrain) {
 }
 
 function makeProbe(three, group) {
-  const geometry = new three.SphereGeometry(.018, 20, 14);
+  const geometry = new three.SphereGeometry(.011, 20, 14);
   const material = new three.MeshBasicMaterial({ color: PROBE_COLOR, toneMapped: false });
   const pin = new three.Mesh(geometry, material);
   const cross = segments(three, new Float32Array(18), { color: PROBE_COLOR, transparent: true, opacity: .88, depthWrite: false });
@@ -216,8 +212,8 @@ function makeProbe(three, group) {
     group.visible = Boolean(terrain && location);
     if (!group.visible) return;
     const [x, height, z] = terrain.project(location);
-    const y = height + .032;
-    const spread = .045;
+    const y = height + .021;
+    const spread = .034;
     pin.position.set(x, y, z);
     const points = cross.geometry.getAttribute('position');
     points.setXYZ(0, x - spread, y, z);
@@ -238,6 +234,16 @@ export function mountTerrainThree({ scene, three, model }) {
   probe.name = 'potential-live-probe';
   root.add(surfaces, probe);
   scene.add(root);
+  const stageRing = scene.getObjectByName('stage-ring');
+  const stageRingVisible = stageRing?.visible;
+  if (stageRing) stageRing.visible = false;
+  const floorGrid = scene.children.find(object => object.type === 'GridHelper');
+  const floorHeight = floorGrid?.position.y;
+  const gridOpacity = floorGrid?.material.opacity;
+  if (floorGrid) {
+    floorGrid.position.y = -.375;
+    floorGrid.material.opacity = .28;
+  }
   const nativeVisibility = model?.group?.visible;
   const paintProbe = makeProbe(three, probe);
   paintProbe(null, null);
@@ -270,9 +276,12 @@ export function mountTerrainThree({ scene, three, model }) {
       paintProbe(terrain, location ? terrain?.nearest(location) : terrain?.defaultPoint);
     },
     frame(stage) {
-      stage.setView([.84, .89, 1.06], [0, .012, 0]);
+      stage.setView([.81, .75, 1.12], [0, .012, 0]);
     },
     destroy() {
+      if (stageRing) stageRing.visible = stageRingVisible;
+      if (floorGrid) floorGrid.position.y = floorHeight;
+      if (floorGrid) floorGrid.material.opacity = gridOpacity;
       window.removeEventListener(PROBE_EVENT, selectProbe);
       disposeObjects(root);
       scene.remove(root);
