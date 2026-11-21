@@ -258,7 +258,7 @@
   }
 
   @media (prefers-reduced-motion: reduce){
-    *{transition-duration:.001ms !important;animation-duration:.001ms !important;}
+    *{transition:none !important;animation:none !important;}
   }
 </style>
 </head>
@@ -504,6 +504,7 @@
     buildParticles();
     sampleTitle();
     if (FROZEN) frozenRender();
+    else if (REDUCED) renderStill();
     else warmup();
   }
 
@@ -1119,14 +1120,21 @@
     requestAnimationFrame(loop);
   }
 
+  function renderStill() {
+    applyPhaseClasses(T.end);
+    for (let i = 0; i < 150; i++) step(T.end, 16.7);
+    render(T.end);
+    setStageLabel(T.end);
+    fillEl.style.transform = 'scaleX(1)';
+    pctEl.textContent = '100%';
+  }
+
   function frame(now) {
     const dt = clamp(now - last, 0, 32);
     last = now;
 
-    let clock = now - startAt;
-    if (REDUCED) clock = Math.max(clock, T.final + 600);
-
-    step(clock, REDUCED ? 16.7 : dt);
+    const clock = now - startAt;
+    step(clock, dt);
     render(clock);
     applyPhaseClasses(clock);
     setStageLabel(clock);
@@ -1183,7 +1191,11 @@
      ============================================================ */
   resize();
   if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => { sampleTitle(); if (FROZEN) frozenRender(); });
+    document.fonts.ready.then(() => {
+      sampleTitle();
+      if (FROZEN) frozenRender();
+      else if (REDUCED) renderStill();
+    });
   }
 
   if (FROZEN) {
@@ -1192,11 +1204,7 @@
     st.textContent = '*{transition:none !important;animation:none !important;}';
     document.head.appendChild(st);
     frozenRender();
-  } else if (REDUCED) {
-    startAt = performance.now() - T.final - 600;
-    body.classList.add('is-hud', 'is-final');
-    requestAnimationFrame(frame);
-  } else {
+  } else if (!REDUCED) {
     start();
     requestAnimationFrame(frame);
   }

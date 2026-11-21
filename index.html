@@ -714,20 +714,14 @@ body {
   <script>
     (() => {
       const params = new URLSearchParams(location.search);
-      if (params.has('experiment') || params.has('skip-opening') ||
-          matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-      const seenKey = 'physics-lab.opening-seen';
-      try {
-        if (sessionStorage.getItem(seenKey)) return;
-      } catch {}
+      if (params.has('experiment') || params.has('skip-opening')) return;
 
       const app = document.getElementById('app');
       const frame = document.createElement('iframe');
       frame.id = 'lab-opening';
       frame.title = '生成式物理实验沙盒开场动画';
       frame.setAttribute('sandbox', 'allow-scripts');
-      frame.src = './opening.html?embedded';
+      frame.src = './opening.html?embedded=2';
 
       const readyTimeout = setTimeout(closeOpening, 6000);
       window.addEventListener('message', receiveOpeningMessage);
@@ -741,7 +735,6 @@ body {
           clearTimeout(readyTimeout);
           frame.focus();
         } else if (event.data === 'physics-lab:enter') {
-          try { sessionStorage.setItem(seenKey, '1'); } catch {}
           closeOpening();
         }
       }
