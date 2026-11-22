@@ -6122,13 +6122,18 @@ if(!potentialTopic&&OZe.test(n))return{reply:`这个问题属于通用物理知�
     try{let n=await aZe(r.value,{apiKey:LZe(),onDownloadProgress:e=>{o.value=e}});if(e.experimentId !== requestExperiment) return;
     if(i.value=n.info,!n.backend){v(u,n.fallbackNote??n.info.description,history,requestExperiment,confirmedPhoto);return}
     if(n.info.classroom){
+      const practical=/怎么做|怎样做|如何做|怎么测|怎样测|如何测|怎么验|怎样验|如何验|操作|实验步骤|下一步|补测/.test(u);
       const limits=e.paramDefs.filter(item=>item.kind===`number`).map(item=>
-        item.label+` `+item.min+`–`+item.max+` `+(item.unit??``)).join(`，`);
-      const result=await n.backend.chat([
-        {role:`system`,content:`结合当前实验条件用普通话简明答疑。简单问题用一至三句回答，避免复述和表情符号。对于明确的计算问题给出结论和依据。可建议学生测试参数允许的条件，超出范围的参数用于理论比较。\n实验台范围：`+limits+`\n`+requestContext},
+        item.label+`最小 `+item.min+` `+(item.unit??``)+`，最大 `+item.max+` `+(item.unit??``)).join(`；`);
+      const instruction=practical?`只建议实验台允许的操作。超出范围的数值可以用于理论计算。`:
+        `用一至三句直接回答。计算问题说清结论和依据。学生只问原理或结果时，不附加操作、实验建议或追问。`;
+      const raw=await n.backend.chat([
+        {role:`system`,content:`结合当前实验条件用普通话简明答疑。使用下列读数和物理关系。`+instruction+
+          `\n实验台范围：`+limits+`\n`+requestContext},
         ...history,
         {role:`user`,content:u},
       ]);
+      const result=practical?raw:raw.split(/^[^\p{L}\p{N}\n]*(?:实验验证建议|实验建议|验证建议|实验验证|操作建议|操作提示|实验操作|你可以在实验|请确认是否)/mu)[0].trim()||raw;
       if(e.experimentId===requestExperiment){
         t.value.push({id:J9(),role:`assistant`,content:result,ts:Date.now(),model:n.info.modelName});
         Lg().bump(`chatTurns`);
