@@ -1,8 +1,9 @@
-import {createTutorVoice} from './voice.js';
+import {createTutorVoice} from './voice.js?v=classroom-tools';
+import {NATURAL_VOICE} from './neural-voice.js';
 import {formatTutorSpeech} from './spoken-text.js';
 import {
   PHOTO_ACCEPT, normalizeVisionEndpoint, preparePhoto, recognizeExperimentPhoto, recognizePendulumPhoto, releasePhoto,
-} from './photo.js?v=all-guides';
+} from './photo.js?v=classroom-tools';
 import {createInquiryGuide} from './guide.js?v=classroom';
 import {PENDULUM, inquiryFor, photoDescription, photoFieldsFor} from './inquiries.js?v=classroom';
 
@@ -110,7 +111,7 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
         return;
       }
       photo.value = prepared;
-      setStatus('请核对照片并填写读数，或使用下方的视觉模型识读。');
+      setStatus('可以在本机自动识读，也可以对照照片直接填写。');
     } catch (error) {
       if (preprocessing === operation) setStatus(error.message, true);
     } finally {
@@ -118,10 +119,10 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
     }
   }
 
-  async function recognize() {
+  async function recognize(local) {
     if (!photo.value || busy.value) return;
     let endpoint;
-    try {
+    if (!local) try {
       endpoint = normalizeVisionEndpoint(profile.value.endpoint);
       if (!profile.value.model.trim()) throw new Error('请填写支持图片的模型名称。');
     } catch (error) {
@@ -133,20 +134,30 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
     busy.value = true;
     setStatus('正在识读照片…');
     try {
-      const configuration = {endpoint, model: profile.value.model.trim(), apiKey: profile.value.apiKey.trim()};
-      visionProfile = {...profile.value};
       const fields = photoFieldsFor(experiment);
-      const options = {...configuration, signal: operation.signal};
-      const result = experiment.experimentId === PENDULUM
-        ? await recognizePendulumPhoto(photo.value, options)
-        : await recognizeExperimentPhoto(photo.value, {
-          ...options, fields, experimentName: experiment.plugin.metadata.name,
+      let result;
+      if (local) {
+        const {recognizeLocalPhoto}=await import('./local-ocr.js');
+        result=await recognizeLocalPhoto(photo.value,fields,{
+          signal:operation.signal,
+          onProgress(stage,progress){
+            if(request===operation&&stage==='recognizing text') setStatus('正在本机识读照片 '+Math.round(progress*100)+'%');
+          },
         });
+      } else {
+        const configuration={endpoint,model:profile.value.model.trim(),apiKey:profile.value.apiKey.trim()};
+        visionProfile={...profile.value};
+        const options={...configuration,signal:operation.signal};
+        result=experiment.experimentId===PENDULUM
+          ? await recognizePendulumPhoto(photo.value,options)
+          : await recognizeExperimentPhoto(photo.value,{...options,fields,experimentName:experiment.plugin.metadata.name});
+      }
       if (request !== operation) return;
       const candidates = Object.fromEntries(fields.map(({key}) => [key, result[key] == null ? '' : String(result[key])]));
       readings.value = {...candidates, ...Object.fromEntries(Object.entries(readings.value).filter(([, value]) => value !== ''))};
       notes.value = result.notes;
-      setStatus('请对照原图核对或补齐读数，再确认关联。');
+      setStatus(local&&result.count===0?'本次没有读到可填写的数值。可以裁切到一条清晰记录重试。':
+        '请对照原图核对或补齐读数，再确认关联。');
     } catch (error) {
       if (request === operation) setStatus(error.message + ' 你仍可手动填写读数。', true);
     } finally {
@@ -195,6 +206,10 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
     return h('section', {class: 'tutor-attachment', 'aria-label': '核对实验照片'}, [
       h('div', {class: 'tutor-guide-stage'}, '核对照片读数'),
       h('img', {src: photo.value.previewUrl, alt: '待核对的实验记录照片'}),
+      h('div', {class:'tutor-guide-actions'}, [
+        button(busy.value?'正在识读…':'本机自动识读',()=>recognize(true),{disabled:busy.value}),
+        h('p',{class:'tutor-status'},'清晰印刷记录效果最佳。照片在本机处理。'),
+      ]),
       h('div', {class: 'tutor-photo-fields'}, photoFieldsFor(experiment).map(field =>
         h('label', {key: field.key}, [
           field.label + (field.unit ? '（' + field.unit + '）' : '') + (field.required ? '' : ' · 选填'),
@@ -221,7 +236,7 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
             onInput: event => { profile.value = {...profile.value, [key]: event.target.value}; },
           }),
         ]))),
-        button(busy.value ? '正在识读…' : '发送照片识读', recognize, {disabled: busy.value}),
+        button(busy.value ? '正在识读…' : '发送照片识读', () => recognize(false), {disabled: busy.value}),
       ]),
       h('div', {class: 'tutor-guide-actions'}, [
         button('确认并关联', confirmPhoto, {class: 'btn sm primary', disabled: busy.value}),
@@ -248,32 +263,34 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
   }
 
   function renderVoiceSettings() {
-    if (!voiceList.value.length) return null;
+    if (!voiceList.value.length&&!voice.capabilities.neural) return null;
     const voices = voiceList.value;
     const selected = voices.find(item => item.voiceURI === voicePreference.value);
     const current = selected ?? voices[0];
+    const isNatural=voice.capabilities.neural&&!selected;
     const voiceName = item => item.name.replace(/^Microsoft\s+|\s+Online \(Natural\).*$/g, '');
     const previewing = speaking.value === 'tutor-voice-preview';
     return h('details', {class: 'tutor-voice-settings'}, [
-      h('summary', null, '播报音色 · ' + voiceName(current) + (current.localService ? '' : '（在线）')),
+      h('summary', null, '播报音色 · ' + (isNatural?'普通话自然音色':voiceName(current)+(current.localService?'':'（在线）'))),
       h('div', {class: 'tutor-media-actions'}, [
         h('select', {
           'aria-label': '选择导师播报音色',
-          value: selected?.voiceURI ?? '',
+          value: isNatural?NATURAL_VOICE:selected?.voiceURI??'',
           onChange: event => {
             voice.stopSpeaking();
             voicePreference.value = event.target.value;
             try { localStorage.setItem(VOICE_PREFERENCE, voicePreference.value); } catch {}
           },
         }, [
-          h('option', {value: ''}, '自动选择'),
+          voice.capabilities.neural?h('option',{value:NATURAL_VOICE},'普通话自然音色（本机合成）'):h('option',{value:''},'自动选择'),
           ...voices.map(item => h('option', {key: item.voiceURI, value: item.voiceURI},
             voiceName(item) + (item.localService ? '' : '（在线）'))),
         ]),
         button(previewing ? '停止试听' : '试听音色', () => voice.toggleSpeaking('tutor-voice-preview', VOICE_SAMPLE),
           {'aria-pressed': previewing}),
       ]),
-      !current.localService ? h('p', {class: 'tutor-status'}, '点击播放后，讲解文字由浏览器的在线语音服务合成。') : null,
+      isNatural?h('p',{class:'tutor-status'},'首次需下载约 90 MB 的音色文件，讲解文字在本机合成。'):
+        !current.localService?h('p',{class:'tutor-status'},'点击播放后，讲解文字由浏览器的在线语音服务合成。'):null,
     ]);
   }
 

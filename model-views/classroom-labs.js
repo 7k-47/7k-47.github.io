@@ -9,6 +9,7 @@ const samples = list=>list.length<=350?list:list.filter((_,index)=>index%Math.ce
 const chord = (start,end,label,options)=>curve(label,[start,end],options);
 const degree = Math.PI/180;
 const drafts = new Map();
+const draftKey = id => 'physics-lab.classroom-draft.v1.'+id;
 
 function drawCircuit(canvas, state) {
   if (!canvas) return;
@@ -51,10 +52,27 @@ function drawCircuit(canvas, state) {
 
 export function createClassroomBench({h,ref,experiment,records,onClose,onUnmounted,prismGeometry}) {
   const id=experiment.experimentId;
-  const state = ref(drafts.get(id) ?? {rows: []});
+  let initial = drafts.get(id);
+  try {
+    const stored=JSON.parse(localStorage.getItem(draftKey(id))??'null');
+    if(Array.isArray(stored?.rows)) initial=stored;
+  } catch {}
+  const state = ref(initial ?? {rows: []});
+  const storageFailed=ref(false);
   const data=()=>experiment.result;
   const values=()=>state.value;
-  const put=(key,value)=>{state.value[key]=value;};
+  function persistDraft(){
+    const snapshot={...state.value,watchRunning:false};
+    drafts.set(id,snapshot);
+    try {
+      localStorage.setItem(draftKey(id),JSON.stringify(snapshot));
+      storageFailed.value=false;
+    } catch {storageFailed.value=true;}
+  }
+  const put=(key,value)=>{
+    state.value[key]=value;
+    if(key!=='watchTime'&&key!=='watchRunning') persistDraft();
+  };
   const read=(key,initial)=>state.value[key]??initial;
   const status=ref('');
   let frame=0;
@@ -96,10 +114,12 @@ export function createClassroomBench({h,ref,experiment,records,onClose,onUnmount
       series:[curve(label,samples(rows).map(r=>[r.t,r[key]]))]});
   }
   function cleanup(){cancelAnimationFrame(frame);frame=0;}
+  window.addEventListener('pagehide',persistDraft);
   onUnmounted(()=>{
     cleanup();
     put('watchRunning',false);
-    drafts.set(id, state.value);
+    persistDraft();
+    window.removeEventListener('pagehide',persistDraft);
   });
 
   function incline(){
@@ -166,6 +186,7 @@ export function createClassroomBench({h,ref,experiment,records,onClose,onUnmount
     const previous=dots[i-1],current=dots[i],next=dots[i+1];
     const measured=(next.x-previous.x)/(next.t-previous.t);
     const conditions=JSON.stringify([experiment.parameters,experiment.mode,experiment.seed]);
+    const savedConditions=read('tapeConditions','');
     const result=fitLine(values().rows.map(item=>[item.t,item.velocity]));
     return [
       p('先看纸带。选一个中间点，读前点和后点的位置，算中间点附近的速度。记录几个不同时间的点，再用速度图求加速度。'),
@@ -181,12 +202,17 @@ export function createClassroomBench({h,ref,experiment,records,onClose,onUnmount
         if(Math.abs(value-measured)>Math.max(.02,Math.abs(measured)*.03)){
           status.value='核对前、后两点的位移差和时间差。';return;
         }
-        if(values().rows.length&&conditions!==read('tapeConditions','')){
+        if(values().rows.length&&conditions!==savedConditions){
           status.value='纸带已经更换。请恢复先前参数或清空本轮读数。';return;
         }
         put('tapeConditions',conditions);
         push({t:current.t,velocity:value});status.value='已记录这个点。';
-      },true),button('保存纸带读数',()=>save('纸带取点与速度拟合',values().rows.map(item=>reading('时间',item.t,'s')+'，'+reading('速度',item.velocity,'m/s')).concat(result?[reading('速度图斜率',result.slope,'m/s²')]:[])),false,!values().rows.length||conditions!==read('tapeConditions','')),
+      },true),button('保存纸带读数',()=>save('纸带取点与速度拟合',values().rows.map(item=>reading('时间',item.t,'s')+'，'+reading('速度',item.velocity,'m/s')).concat(result?[reading('速度图斜率',result.slope,'m/s²')]:[])),false,!values().rows.length||conditions!==savedConditions),
+      values().rows.length&&conditions!==savedConditions?button('恢复草稿的纸带条件',()=>{
+        const [parameters,mode,seed]=JSON.parse(savedConditions);
+        set(parameters);experiment.setMode(mode);experiment.setSeed(seed);
+        status.value='已恢复原来的纸带，可以继续测量。';
+      }):null,
       button('清空本轮纸带读数',()=>{put('rows',[]);status.value='已清空本轮待保存读数。';},false,!values().rows.length)),
       values().rows.length?renderPlot({title:'学生取点的速度图', xLabel:'时间（s）',yLabel:'速度（m/s）',
         series:[curve('已记录读数',values().rows.slice().sort((a,b)=>a.t-b.t).map(item=>[item.t,item.velocity]),{dots:true})]}):null,
@@ -257,7 +283,7 @@ export function createClassroomBench({h,ref,experiment,records,onClose,onUnmount
       }
       frame=requestAnimationFrame(tick);
     }
-    function stop(){cleanup();put('watchRunning',false);}
+    function stop(){cleanup();put('watchRunning',false);persistDraft();}
     function capture(){
       const count=read('cycleCount',30);
       if(!Number.isInteger(count)||count<1||count>200||!(elapsed>0)||running||
@@ -585,6 +611,7 @@ export function createClassroomBench({h,ref,experiment,records,onClose,onUnmount
         button('关闭测量台',onClose)]),
       h('div',{class:'classroom-body'},data()&&lab?lab[1]().filter(Boolean):[p('当前实验还没有可用的测量数据。')]),
       status.value?h('p',{class:'classroom-status',role:'status'},status.value):null,
+      storageFailed.value?h('p',{class:'classroom-status',role:'alert'},'浏览器暂时无法保存草稿。请先保存实验报告或导出读数，再刷新页面。'):null,
     ]),
   ]);
 }

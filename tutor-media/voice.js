@@ -1,3 +1,5 @@
+import {createNeuralVoice, NATURAL_VOICE, neuralAvailable} from './neural-voice.js';
+
 const MANDARIN = 'zh-CN';
 
 const recognitionErrors = {
@@ -125,9 +127,12 @@ export function createTutorVoice({
   const Recognition = browser.SpeechRecognition ?? browser.webkitSpeechRecognition;
   const synthesis = browser.speechSynthesis;
   const Utterance = browser.SpeechSynthesisUtterance;
+  const nativeSynthesis=Boolean(synthesis&&typeof Utterance==='function');
+  const neural=neuralAvailable?createNeuralVoice():null;
   const capabilities = Object.freeze({
     recognition: typeof Recognition === 'function' && browser.isSecureContext !== false,
-    synthesis: Boolean(synthesis && typeof Utterance === 'function'),
+    synthesis: nativeSynthesis||Boolean(neural),
+    neural: Boolean(neural),
   });
 
   let disposed = false;
@@ -135,7 +140,7 @@ export function createTutorVoice({
   let speaking = null;
 
   function refreshVoices() {
-    onVoicesChange(capabilities.synthesis ? getMandarinVoices(synthesis) : []);
+    onVoicesChange(nativeSynthesis ? getMandarinVoices(synthesis) : []);
   }
   refreshVoices();
   synthesis?.addEventListener?.('voiceschanged', refreshVoices);
@@ -266,7 +271,8 @@ export function createTutorVoice({
   function stopSpeaking() {
     const session = speaking;
     if (!session || !finishSpeaking(session)) return false;
-    synthesis.cancel();
+    session.abort?.abort();
+    if(session.utterance) synthesis?.cancel();
     onStatus('');
     return true;
   }
@@ -324,6 +330,26 @@ export function createTutorVoice({
     }
   }
 
+  async function playNaturally(session){
+    try{
+      for(const text of session.sections){
+        await neural.play(text,session.abort.signal,onStatus);
+        session.index+=1;
+      }
+      finishSpeaking(session);
+    } catch {
+      if(speaking!==session) return;
+      if(!session.index&&nativeSynthesis){
+        session.sections=speechSections(session.text,session.voice?.localService===false);
+        onStatus('自然音色暂不可用，正在使用设备语音。');
+        playSection(session);
+      }else{
+        finishSpeaking(session);
+        onStatus('自然语音暂时中断。可以重试，或继续阅读文字。');
+      }
+    }
+  }
+
   function speak(messageId, text) {
     if (disposed || !text.trim()) return false;
     if (!capabilities.synthesis) {
@@ -336,22 +362,29 @@ export function createTutorVoice({
     }
 
     stopSpeaking();
-    const voices = getMandarinVoices(synthesis);
+    const voices = nativeSynthesis?getMandarinVoices(synthesis):[];
     const uri = preferredVoice();
     const voice = voices.find(item => item.voiceURI === uri) ?? voices[0];
     const online = voice?.localService === false;
+    const useNeural=neural&&(!uri||uri===NATURAL_VOICE||!voices.some(item=>item.voiceURI===uri));
     const session = {
       id: messageId,
+      text,
       voice,
       localFallback: online ? voices.find(item => item.localService) : null,
-      sections: speechSections(text, online),
+      sections: speechSections(text, useNeural||online),
       index: 0,
       utterance: null,
       pause: null,
+      abort: useNeural?new AbortController():null,
     };
     speaking = session;
     onStatus('');
     onSpeakingChange(messageId);
+    if(useNeural){
+      void playNaturally(session);
+      return true;
+    }
     return playSection(session);
   }
 
@@ -365,6 +398,7 @@ export function createTutorVoice({
     synthesis?.removeEventListener?.('voiceschanged', refreshVoices);
     cancelListening();
     stopSpeaking();
+    neural?.dispose();
   }
 
   return {

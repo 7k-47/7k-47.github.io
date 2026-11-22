@@ -1,0 +1,8 @@
+{
+  "name": "physics-classroom-server",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22"},
+  "scripts": {"start": "node server.mjs"},
+  "dependencies": {"node-llama-cpp": "3.22.3"}
+}
