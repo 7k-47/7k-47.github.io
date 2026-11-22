@@ -83,7 +83,7 @@ export async function recognizeLocalPhoto(photo, fields, {signal,onProgress}={})
   const controller = new AbortController();
   const cancel=()=>controller.abort(signal.reason);
   signal?.addEventListener('abort',cancel,{once:true});
-  const timeout=setTimeout(()=>controller.abort(new Error('本机识读用时过长，请裁切照片后重试。')),45000);
+  const timeout=setTimeout(()=>controller.abort(new Error('本机识读用时过长，请稍后重试或手动填写。')),90000);
   const cancelled=new Promise((_,reject)=>controller.signal.addEventListener('abort',
     ()=>reject(controller.signal.reason),{once:true}));
   const read=(async()=>{
@@ -95,6 +95,7 @@ export async function recognizeLocalPhoto(photo, fields, {signal,onProgress}={})
       langPath:browserAssets.href.replace(/\/$/,''),
       workerBlobURL:false,
       logger:event=>onProgress?.(event.status,event.progress),
+      errorHandler:()=>controller.abort(new Error('本机识读引擎未能加载或处理这张照片。')),
     });
     if(controller.signal.aborted){
       await worker.terminate();

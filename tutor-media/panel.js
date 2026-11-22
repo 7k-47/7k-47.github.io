@@ -137,11 +137,14 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
       const fields = photoFieldsFor(experiment);
       let result;
       if (local) {
-        const {recognizeLocalPhoto}=await import('./local-ocr.js');
+        const {recognizeLocalPhoto}=await import('./local-ocr.js?v=2');
         result=await recognizeLocalPhoto(photo.value,fields,{
           signal:operation.signal,
           onProgress(stage,progress){
-            if(request===operation&&stage==='recognizing text') setStatus('正在本机识读照片 '+Math.round(progress*100)+'%');
+            if(request!==operation)return;
+            if(stage==='recognizing text')setStatus('正在本机识读照片 '+Math.round(progress*100)+'%');
+            else if(stage==='loading language traineddata')setStatus('正在加载中文和数字识读模型 '+Math.round(progress*100)+'%');
+            else if(stage==='loading tesseract core')setStatus('正在加载本机识读引擎。');
           },
         });
       } else {
@@ -307,7 +310,7 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
       voiceStatus.value ? h('p', {class: 'tutor-status', role: 'status'}, voiceStatus.value) : null,
       photoReview(),
       photoStatus.value ? h('p', {
-        class: ['tutor-status', {'tutor-error': photoError.value}],
+        class: 'tutor-status'+(photoError.value?' tutor-error':''),
         role: photoError.value ? 'alert' : 'status',
       }, photoStatus.value) : null,
       attached.value ? h('div', {class: 'tutor-media-actions'}, [
