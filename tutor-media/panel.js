@@ -1,19 +1,12 @@
 import {createTutorVoice} from './voice.js';
 import {formatTutorSpeech} from './spoken-text.js';
-import {PHOTO_ACCEPT, normalizeVisionEndpoint, preparePhoto, recognizePendulumPhoto, releasePhoto} from './photo.js';
-import {createPendulumGuide, PENDULUM} from './pendulum.js';
+import {
+  PHOTO_ACCEPT, normalizeVisionEndpoint, preparePhoto, recognizeExperimentPhoto, recognizePendulumPhoto, releasePhoto,
+} from './photo.js?v=all-guides';
+import {createInquiryGuide} from './guide.js';
+import {PENDULUM, inquiryFor, photoDescription, photoFieldsFor} from './inquiries.js';
 
-const fields = [
-  {key: 'lengthM', label: '摆长（m）', min: 0.001, max: 100, step: 'any'},
-  {key: 'angleDeg', label: '初始摆角（°，选填）', min: 0, max: 180, step: 'any'},
-  {key: 'oscillations', label: '全振动次数', min: 1, max: 10000, step: 1},
-  {key: 'totalTimeS', label: '总用时（s）', min: 0.001, max: 1000000, step: 'any'},
-];
 let visionProfile = null;
-
-function emptyReadings() {
-  return Object.fromEntries(fields.map(({key}) => [key, '']));
-}
 
 const VOICE_PREFERENCE = 'physics-lab.tutor-voice';
 const VOICE_SAMPLE = '先别急着下结论。我们一起看看这两次记录，找出是哪一个条件变了。';
@@ -39,7 +32,7 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
   const photoStatus = ref('');
   const photoError = ref(false);
   const busy = ref(false);
-  const readings = ref(emptyReadings());
+  const readings = ref({});
   const notes = ref([]);
   const newEvidence = ref('');
   const attached = ref(null);
@@ -83,12 +76,12 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
     busy.value = false;
     if (photo.value) releasePhoto(photo.value);
     photo.value = null;
-    readings.value = emptyReadings();
+    readings.value = Object.fromEntries(photoFieldsFor(experiment).map(field => [field.key, '']));
     notes.value = [];
     setStatus('');
   }
 
-  const guide = createPendulumGuide({h, ref, watch, experiment, records, lesson, speak});
+  const guide = createInquiryGuide({h, ref, watch, experiment, records, lesson, speak});
 
   const stop = watch(() => experiment.experimentId, () => {
     voice.cancelListening();
@@ -142,9 +135,15 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
     try {
       const configuration = {endpoint, model: profile.value.model.trim(), apiKey: profile.value.apiKey.trim()};
       visionProfile = {...profile.value};
-      const result = await recognizePendulumPhoto(photo.value, {...configuration, signal: operation.signal});
+      const fields = photoFieldsFor(experiment);
+      const options = {...configuration, signal: operation.signal};
+      const result = experiment.experimentId === PENDULUM
+        ? await recognizePendulumPhoto(photo.value, options)
+        : await recognizeExperimentPhoto(photo.value, {
+          ...options, fields, experimentName: experiment.plugin.metadata.name,
+        });
       if (request !== operation) return;
-      const candidates = Object.fromEntries(fields.map(({key}) => [key, result[key] === null ? '' : String(result[key])]));
+      const candidates = Object.fromEntries(fields.map(({key}) => [key, result[key] == null ? '' : String(result[key])]));
       readings.value = {...candidates, ...Object.fromEntries(Object.entries(readings.value).filter(([, value]) => value !== ''))};
       notes.value = result.notes;
       setStatus('请对照原图核对或补齐读数，再确认关联。');
@@ -160,28 +159,25 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
 
   function confirmPhoto() {
     if (!photo.value || busy.value) return;
+    const fields = photoFieldsFor(experiment);
     const verified = {};
     for (const field of fields) {
-      const input = readings.value[field.key].trim();
+      const input = String(readings.value[field.key] ?? '').trim();
       const value = input ? Number(input) : null;
-      if ((value === null && field.key !== 'angleDeg') ||
-          (value !== null && (!Number.isFinite(value) || value < field.min || value > field.max ||
-            (field.step === 1 && !Number.isInteger(value))))) {
+      if ((value === null && field.required) || (value !== null &&
+          (!Number.isFinite(value) || (field.min !== undefined && value < field.min) ||
+           (field.max !== undefined && value > field.max) || (field.integer && !Number.isInteger(value))))) {
         setStatus('请核对「' + field.label + '」的读数。', true);
         return;
       }
       verified[field.key] = value;
     }
-    // Only verified readings enter the learning record or language model context.
     if (!guide.addPhoto(verified)) return;
-    const {lengthM, angleDeg, oscillations, totalTimeS} = verified;
-    newEvidence.value = '学生核对的单摆照片读数：摆长 ' + lengthM + ' m，' +
-      (angleDeg === null ? '' : '初始摆角 ' + angleDeg + '°，') +
-      oscillations + ' 次全振动用时 ' + totalTimeS + ' s，平均周期 ' +
-      (totalTimeS / oscillations).toFixed(3) + ' s。';
+    newEvidence.value = '学生核对的「' + experiment.plugin.metadata.name + '」照片读数：' +
+      photoDescription(fields, verified) + '。';
     attached.value = verified;
     clearPhoto();
-    setStatus('照片读数已关联到单摆学习记录。');
+    setStatus('照片读数已关联到当前实验的报告。');
   }
 
   function imagePicker(label, capture) {
@@ -196,15 +192,15 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
 
   function photoReview() {
     if (!photo.value) return null;
-    return h('section', {class: 'tutor-attachment', 'aria-label': '核对单摆照片'}, [
+    return h('section', {class: 'tutor-attachment', 'aria-label': '核对实验照片'}, [
       h('div', {class: 'tutor-guide-stage'}, '核对照片读数'),
       h('img', {src: photo.value.previewUrl, alt: '待核对的实验记录照片'}),
-      h('div', {class: 'tutor-photo-fields'}, fields.map(field =>
+      h('div', {class: 'tutor-photo-fields'}, photoFieldsFor(experiment).map(field =>
         h('label', {key: field.key}, [
-          field.label,
+          field.label + (field.unit ? '（' + field.unit + '）' : '') + (field.required ? '' : ' · 选填'),
           h('input', {
-            class: 'input', type: 'number', inputmode: 'decimal', min: field.min, max: field.max,
-            step: field.step, value: readings.value[field.key], disabled: busy.value,
+            class: 'input', type: 'number', inputmode: field.integer ? 'numeric' : 'decimal',
+            min: field.min, max: field.max, step: field.integer ? 1 : 'any', value: readings.value[field.key], disabled: busy.value,
             onInput: event => { readings.value[field.key] = event.target.value; },
           }),
         ]))),
@@ -234,7 +230,7 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
   }
 
   function renderGuide() {
-    if (experiment.experimentId !== PENDULUM) return null;
+    if (!inquiryFor(experiment.experimentId)) return null;
     return h('div', {class: 'tutor-guide-wrap'}, [
       h('div', {class: 'tutor-guide-actions tutor-mode', role: 'group', 'aria-label': '导师模式'}, [
         button('随实验引导', () => changeMode(true), {'aria-pressed': guided.value}),
@@ -281,13 +277,13 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
   }
 
   function renderMedia() {
-    const pendulum = experiment.experimentId === PENDULUM;
+    const hasInquiry = Boolean(inquiryFor(experiment.experimentId));
     return h('div', {class: 'tutor-media'}, [
       h('div', {class: 'tutor-media-actions'}, [
         button(listening.value ? '结束录音' : '语音提问', voice.toggleListening,
           {'aria-pressed': listening.value, title: '语音由浏览器处理，转写后可编辑'}),
-        pendulum ? imagePicker('拍照', 'environment') : null,
-        pendulum ? imagePicker('上传照片') : null,
+        hasInquiry ? imagePicker('拍照', 'environment') : null,
+        hasInquiry ? imagePicker('上传照片') : null,
       ]),
       renderVoiceSettings(),
       voiceStatus.value ? h('p', {class: 'tutor-status', role: 'status'}, voiceStatus.value) : null,
@@ -317,5 +313,5 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
     clearPhoto();
   }
 
-  return {renderMedia, renderGuide, speak, takeContext, isListening: () => listening.value, dispose};
+  return {renderMedia, renderGuide, speak, takeContext, isGuided: () => guided.value && Boolean(inquiryFor(experiment.experimentId)), isListening: () => listening.value, dispose};
 }
