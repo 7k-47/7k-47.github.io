@@ -1,6 +1,6 @@
-import {PENDULUM, inquiryFor, inquiryProgress, photoDescription, photoFieldsFor, predictionOptions} from './inquiries.js';
+import {PENDULUM, inquiryFor, inquiryProgress, photoDescription, photoFieldsFor, predictionOptions} from './inquiries.js?v=classroom';
 
-const PENDULUM_CYCLES = 30;
+const PENDULUM_PLAYBACK_CYCLES = 3;
 
 function same(a, b) {
   if (a === b) return true;
@@ -26,11 +26,12 @@ function readRun(record, inquiry) {
   if (record.experimentId === PENDULUM) {
     const result = record.result;
     const measurement = record.mode === 'measurement' ? result?.measurement : null;
-    const cycles = measurement?.cycles ?? PENDULUM_CYCLES;
-    const total = measurement?.totalTimeRead ?? result?.periodActual * cycles;
+    const bench = record.classroomEvidence?.pendulum;
+    const cycles = bench?.cycles ?? measurement?.cycles ?? PENDULUM_PLAYBACK_CYCLES;
+    const total = bench?.seconds ?? measurement?.totalTimeRead ?? result?.periodActual * cycles;
     if (!Number.isSafeInteger(cycles) || cycles <= 0 || !Number.isFinite(total) || total <= 0) return null;
     readings[0] = total / cycles;
-    timing = {cycles, total};
+    timing = {cycles, total, source:bench?'手动秒表':measurement?'模拟秒表':'仿真计时'};
   }
   return Number.isFinite(readings[0]) ? {record, readings, timing} : null;
 }
@@ -44,7 +45,7 @@ function measurementChanges(first, second) {
   return changes;
 }
 
-export function createInquiryGuide({h, ref, watch, experiment, records, lesson, speak}) {
+export function createInquiryGuide({h, ref, watch, experiment, records, lesson, speak, openClassroom}) {
   const inquiry = () => inquiryFor(experiment.experimentId);
   const progress = () => inquiryProgress(experiment.experimentId);
   const task = () => lesson.progressOf(progress().lessonId).tasks[progress().taskId] ?? {};
@@ -82,12 +83,17 @@ export function createInquiryGuide({h, ref, watch, experiment, records, lesson, 
       const second = saved.find(run => run.record.runId === completed.second);
       if (first && second) return {first, second};
     }
-    const index = saved.findIndex(run => run.record.runId === current.tutorBaseline &&
+    const measured = saved.filter(({record}) => {
+      if (current.tutorStarted && record.createdAt < current.tutorStarted) return false;
+      if (record.measurementPhase) return ['direct','finished','measured'].includes(record.measurementPhase);
+      return !experiment.canRun || /^(运行完成|AI 导师导学测量)/.test(record.note ?? '');
+    });
+    const index = measured.findIndex(run => run.record.runId === current.tutorBaseline &&
       initialMatches(config, run.record.parameters));
-    const baseline = index >= 0 ? index : saved.findIndex(run => initialMatches(config, run.record.parameters));
+    const baseline = index >= 0 ? index : measured.findIndex(run => initialMatches(config, run.record.parameters));
     return {
-      first: saved[baseline] ?? null,
-      second: baseline < 0 ? null : saved.slice(0, baseline).find(run =>
+      first: measured[baseline] ?? null,
+      second: baseline < 0 ? null : measured.slice(0, baseline).find(run =>
         same(run.record.parameters[config.variable], config.to)) ?? null,
     };
   }
@@ -105,6 +111,7 @@ export function createInquiryGuide({h, ref, watch, experiment, records, lesson, 
   function pairChanges(config, first, second) {
     const changes = differences(config, first.record, second.record);
     if (first.timing && second.timing && first.timing.cycles !== second.timing.cycles) changes.push('全振动计数不同');
+    if (first.timing && second.timing && first.timing.source !== second.timing.source) changes.push('计时方式不同');
     return changes;
   }
 
@@ -112,7 +119,7 @@ export function createInquiryGuide({h, ref, watch, experiment, records, lesson, 
     const control = experiment.paramDefs.find(param => param.key === config.variable);
     const values = [control.label + ' ' + parameterValue(control, run.record.parameters[control.key])];
     if (run.timing) values.push('初始摆角 ' + run.record.parameters.amplitudeDeg + '°',
-      run.timing.cycles + ' 次用时 ' + run.timing.total.toFixed(2) + ' s');
+      run.timing.source + ' ' + run.timing.cycles + ' 次用时 ' + run.timing.total.toFixed(2) + ' s');
     config.metrics.forEach((metric, index) => {
       if (Number.isFinite(run.readings[index])) values.push(metricValue(run.readings[index], metric));
     });
@@ -145,7 +152,34 @@ export function createInquiryGuide({h, ref, watch, experiment, records, lesson, 
     update('tutorTitle', config.title);
     update('tutorPhotos', [...(task().tutorPhotos ?? []), reading]);
     syncObservation();
+    const current = task();
+    if (current.completed && current.tutorPair) archiveGuide(current);
     return true;
+  }
+
+  function archiveGuide(current) {
+    if (!current.tutorPair) return;
+    records.setGuide(current.tutorPair.second, {
+      title: current.tutorTitle || inquiry()?.title || '控制变量对照',
+      prediction: current.prediction || '',
+      observation: current.observation || '',
+      explanation: current.explanation || '',
+    });
+  }
+
+  function startAnotherRound() {
+    const current = task();
+    archiveGuide(current);
+    const {lessonId} = progress();
+    lesson.setPrediction(lessonId,'');
+    for (const key of ['prediction','explanation','observation','tutorOwnObservation','tutorLastObservation',
+      'tutorComparison','tutorBaseline','tutorPair']) update(key,null);
+    update('completed',false);
+    update('tutorPhotos',[]);
+    update('tutorStarted',new Date().toISOString());
+    explanation.value='';
+    hint.value=false;
+    status.value='已开始新一轮，上一轮报告已保留。';
   }
 
   function matchesSnapshot(snapshot) {
@@ -231,6 +265,7 @@ export function createInquiryGuide({h, ref, watch, experiment, records, lesson, 
     if (lesson.completeTask(lessonId, taskId, saved.parameters, saved.runId).ok) {
       update('tutorPair', {first: first.record.runId, second: saved.runId});
       records.setConclusion(saved.runId, text);
+      archiveGuide(task());
       records.select(saved.runId);
       status.value = '解释和对照数据已保存到实验报告。';
     }
@@ -272,6 +307,7 @@ export function createInquiryGuide({h, ref, watch, experiment, records, lesson, 
       title = '已完成对照';
       instruction = '此前保存的对照数据和解释可在实验报告中查看。';
       children.push(paragraph(current.tutorComparison, 'tutor-evidence tutor-report-observation'));
+      actions.push(button('开始新一轮', startAnotherRound));
     } else if (!first) {
       title = '测量第一组';
       const parameters = initialConditions(config);
@@ -286,6 +322,7 @@ export function createInquiryGuide({h, ref, watch, experiment, records, lesson, 
           () => apply(config, parameters), true, running));
       } else {
         actions.push(button(savedMode + '第一组', () => runGroup(config, null), true, running));
+        if (experiment.experimentId === PENDULUM) actions.push(button('用课堂秒表记录第一组', openClassroom, false, running));
       }
     } else {
       const recordedDiff = second ? pairChanges(config, first, second) : [];
@@ -303,6 +340,7 @@ export function createInquiryGuide({h, ref, watch, experiment, records, lesson, 
             onInput: event => { explanation.value = event.target.value; }}),
         ]));
         if (!completed && !hint.value) actions.push(button('再给一点提示', () => { hint.value = true; }));
+        if (completed) actions.push(button('开始新一轮', startAnotherRound));
         if (!completed || explanation.value.trim() !== current.explanation) {
           actions.push(button('保存解释到报告', () => saveExplanation(config), true, !explanation.value.trim()));
         }
@@ -316,6 +354,9 @@ export function createInquiryGuide({h, ref, watch, experiment, records, lesson, 
         if (liveDiff.length || !same(experiment.parameters[config.variable], config.to)) {
           actions.push(button(liveDiff.length ? '恢复对照条件' : control.label + '设为 ' + parameterValue(control, config.to),
             () => apply(config, {...first.record.parameters, [config.variable]: config.to}, first.record), true, running));
+        } else if (first.timing?.source === '手动秒表') {
+          children.push(paragraph('沿用课堂秒表，并计数 ' + first.timing.cycles + ' 次全振动后保存读数。','tutor-evidence'));
+          actions.push(button('用课堂秒表记录第二组',openClassroom,true,running));
         } else {
           actions.push(button(savedMode + '第二组', () => runGroup(config, first), true, running));
         }

@@ -110,10 +110,11 @@ export const INQUIRIES = {
     hint: '每组都比较碰撞前后两个紧邻时刻的系统总动量。注意速度的正负方向。',
   },
   'electricity.potential': {
-    title: '电荷量与最大场强', variable: 'chargeMicroC', from: 2, to: 4, setup: {scene: 'unlike'},
-    prediction: '保持异号点电荷的间距、采样范围和布局相同。把两电荷的电荷量大小从 2 μC 增至 4 μC，模型中最大场强会怎样变？',
-    metrics: [{key: 'eMax', label: '采样范围最大场强', unit: 'V/m'}],
-    hint: '要比较同一采样区域。单个电荷的场强与电荷量成正比，合场强用分量叠加。',
+    title: '同号与异号电荷的中点', variable: 'scene', from: 'like', to: 'unlike',
+    prediction: '两点电荷的电荷量大小和间距相同。从两个正电荷改为一正一负，连线中点的电势会怎样变？',
+    options: ['降为零', '升高', '保持不变'],
+    metrics: [{key: 'midPhi', label: '中点电势', unit: 'V'}, {key: 'midField', label: '中点场强', unit: 'V/m'}],
+    hint: '分别叠加两份带符号的电势，再按方向叠加两个电场。比较两个量各在哪一组为零。',
   },
 };
 
@@ -144,7 +145,7 @@ export function photoFieldsFor(experiment) {
   if (!inquiry) return [];
   const control = experiment.paramDefs.find(param => param.key === inquiry.variable);
   return [
-    {key: control.key, label: control.label, unit: control.unit || ''},
+    ...(control?.kind === 'number' ? [{key: control.key, label: control.label, unit: control.unit || ''}] : []),
     ...inquiry.metrics.map((metric, index) => ({...metric, required: index === 0})),
   ];
 }

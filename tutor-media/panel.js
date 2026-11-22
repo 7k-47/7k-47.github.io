@@ -3,8 +3,8 @@ import {formatTutorSpeech} from './spoken-text.js';
 import {
   PHOTO_ACCEPT, normalizeVisionEndpoint, preparePhoto, recognizeExperimentPhoto, recognizePendulumPhoto, releasePhoto,
 } from './photo.js?v=all-guides';
-import {createInquiryGuide} from './guide.js';
-import {PENDULUM, inquiryFor, photoDescription, photoFieldsFor} from './inquiries.js';
+import {createInquiryGuide} from './guide.js?v=classroom';
+import {PENDULUM, inquiryFor, photoDescription, photoFieldsFor} from './inquiries.js?v=classroom';
 
 let visionProfile = null;
 
@@ -21,7 +21,7 @@ function readPreference() {
   catch { return true; }
 }
 
-export function createTutorSession({h, ref, watch, experiment, records, lesson, draft, byokVision}) {
+export function createTutorSession({h, ref, watch, experiment, records, lesson, draft, byokVision, openClassroom}) {
   const guided = ref(readPreference());
   const listening = ref(false);
   const speaking = ref(null);
@@ -81,7 +81,7 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
     setStatus('');
   }
 
-  const guide = createInquiryGuide({h, ref, watch, experiment, records, lesson, speak});
+  const guide = createInquiryGuide({h, ref, watch, experiment, records, lesson, speak, openClassroom});
 
   const stop = watch(() => experiment.experimentId, () => {
     voice.cancelListening();
@@ -200,7 +200,8 @@ export function createTutorSession({h, ref, watch, experiment, records, lesson, 
           field.label + (field.unit ? '（' + field.unit + '）' : '') + (field.required ? '' : ' · 选填'),
           h('input', {
             class: 'input', type: 'number', inputmode: field.integer ? 'numeric' : 'decimal',
-            min: field.min, max: field.max, step: field.integer ? 1 : 'any', value: readings.value[field.key], disabled: busy.value,
+            min: field.min, max: field.max, step: field.integer ? 1 : 'any', value: readings.value[field.key],
+            'aria-required': field.required || undefined, disabled: busy.value,
             onInput: event => { readings.value[field.key] = event.target.value; },
           }),
         ]))),
